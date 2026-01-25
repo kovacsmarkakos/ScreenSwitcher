@@ -1,0 +1,16 @@
+# .NET Core
+bin/
+obj/
+
+# User-specific configuration
+config.json
+
+# Logs
+debug.log
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
