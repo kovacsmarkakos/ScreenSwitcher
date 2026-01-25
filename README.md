@@ -1,47 +1,77 @@
 # ScreenSwitcher
 
-A lightweight, background utility for Windows 11 that allows you to switch between display modes using global keyboard shortcuts. It's designed to be faster and more direct than the default Windows display switcher.
+**ScreenSwitcher** is a high-performance, lightweight background utility for Windows 11 designed for users with multi-monitor setups, specifically those using a secondary Smart TV (like an LG OLED). It removes the friction of manual display management and TV power controls by combining them into instant, global keyboard shortcuts.
 
-## Features
+---
 
-- **Global Hotkeys**: Switch displays instantly from anywhere.
-- **Background Operation**: Runs silently in the background without any visible windows.
-- **Low Footprint**: Extremely lightweight C# .NET application.
-- **Auto-Startup**: Automatically registers to start with Windows.
+## 🚀 Key Features
 
-## Hotkeys
+- **Global Hotkeys**: Switch display modes instantly from anywhere in Windows without opening menus.
+- **Smart TV Integration**: Automatically sends a "Magic Packet" (Wake-on-LAN) to power on your TV when switching to the secondary screen.
+- **Asynchronous Execution**: Display switching is triggered immediately; network signals for the TV are handled in the background to ensure zero lag in hotkey responsiveness.
+- **Robust Networking**: Uses a burst-packet strategy (sending 5 packets across both ports 7 and 9) across all available network interfaces to ensure your TV wakes up reliably every time.
+- **Silent Background Operation**: Runs as a hidden process with no taskbar clutter.
+- **Auto-Startup**: Automatically registers with Windows to start when you log in.
+- **Self-Maintaining Logs**: Built-in `debug.log` with a strict 256KB rotation cap to keep your filesystem clean.
 
-| Hotkey | Action |
+---
+
+## ⌨️ Shortcuts
+
+| Shortcut | Action |
 | :--- | :--- |
-| `Shift + Ctrl + 1` | **PC Screen Only**: Enable primary display only. |
-| `Shift + Ctrl + 2` | **Second Screen Only**: Enable secondary display only. |
+| **`Shift + Ctrl + 1`** | **PC Screen Only**: Instantly enables your primary monitor. |
+| **`Shift + Ctrl + 2`** | **Second Screen Only**: Powers on your Smart TV (WoL) and switches display to it. |
 
-## Installation & Setup
+---
 
-1. **Prerequisites**: Ensure you have [.NET 8.0 SDK](https://dotnet.microsoft.com/download) or later installed.
-2. **Clone the Repo**:
-   ```bash
-   git clone https://github.com/yourusername/ScreenSwitcher.git
-   cd ScreenSwitcher
-   ```
-3. **Build the Project**:
-   ```bash
-   dotnet build -c Release
-   ```
-4. **Run the Application**:
-   - You can run it directly: `dotnet run`
-   - Or launch the compiled executable from `bin/Release/net10.0-windows/ScreenSwitcher.exe`.
+## ⚙️ Configuration
 
-Once launched, the app will automatically add itself to the Windows Registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`) so it starts every time you log in.
+The program is customized via a `config.json` file located in the application directory.
 
-## How It Works
+```json
+{
+  "EnableTvWake": true,
+  "TvMacAddress": "3C:F0:83:88:D2:50"
+}
+```
 
-The program uses the Windows API (`User32.dll`) to register global hotkeys. When a hotkey is detected, it invokes the built-in Windows utility `DisplaySwitch.exe` with the corresponding mode argument:
-- `1`: PC Screen Only
-- `4`: Second Screen Only
+- `EnableTvWake`: Toggle the Wake-on-LAN feature `true` or `false`.
+- `TvMacAddress`: The physical MAC address of your TV. Supports formats like `00:00:00:00:00:00`, `00-00-00...`, or `000000...`.
 
-## Technical Details
+---
 
-- **Language**: C#
-- **Framework**: .NET (Windows Forms - used for the message loop)
-- **Deployment**: Single executable background process.
+## 🛠️ Setup & Requirements
+
+### 1. Prerequisites
+- **.NET 10.0 Runtime** (Windows)
+- An **LG OLED** or any Smart TV that supports Wake-on-LAN.
+
+### 2. TV Preparation
+- Ensure your TV is connected to the same local network as your PC (Ethernet is recommended for highest reliability).
+- Enable "Wake-on-LAN" or "Mobile/Network Power On" in your TV settings.
+  - *LG TVs*: `Settings > General > Devices > External Devices > TV On With Mobile` -> **ON**.
+
+### 3. Deployment
+1. Build the project using `dotnet build -c Release`.
+2. Edit the `config.json` in the build folder with your TV's MAC address.
+3. Launch `ScreenSwitcher.exe`. It will automatically add itself to your Windows Startup.
+
+---
+
+## 🔍 Technical Implementation
+
+| Component | Detail |
+| :--- | :--- |
+| **Language** | C# 13 |
+| **Framework** | .NET 10 (WinForms for Message Loop) |
+| **Display Engine** | Native Windows `DisplaySwitch.exe` integration |
+| **WoL Logic** | Multicast UDP (Interface-aware directed broadcast) |
+| **Configuration** | Singleton Caching for zero-latency shortcut processing |
+| **Persistence** | Windows Registry (HKCU Run Key) |
+
+---
+
+## 📜 License
+
+This project is open-source and available under the MIT License.

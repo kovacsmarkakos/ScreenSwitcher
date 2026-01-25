@@ -75,6 +75,17 @@ namespace ScreenSwitcher
         {
             try
             {
+                // If switching to second screen (mode "4"), attempt to wake the TV
+                if (mode == "4")
+                {
+                    var config = AppConfig.Instance;
+                    if (config.EnableTvWake)
+                    {
+                        // Fire and forget the wake command to keep the UI responsive
+                        _ = WakeOnLan.WakeAsync(config.TvMacAddress);
+                    }
+                }
+
                 Process.Start("DisplaySwitch.exe", mode);
             }
             catch (Exception ex)
