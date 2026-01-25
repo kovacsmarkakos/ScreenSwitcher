@@ -26,7 +26,9 @@
 
 ## ⚙️ Configuration
 
-The program is customized via a `config.json` file located in the application directory.
+The program uses a `config.json` file for settings. To get started:
+1. Copy `config.json.template` to `config.json`.
+2. Edit `config.json` with your TV's details.
 
 ```json
 {
@@ -53,8 +55,9 @@ The program is customized via a `config.json` file located in the application di
 
 ### 3. Deployment
 1. Build the project using `dotnet build -c Release`.
-2. Edit the `config.json` in the build folder with your TV's MAC address.
-3. Launch `ScreenSwitcher.exe`. It will automatically add itself to your Windows Startup.
+2. Copy `config.json.template` to `config.json` in the root or build folder.
+3. Edit `config.json` with your TV's MAC address.
+4. Launch `ScreenSwitcher.exe`. It will automatically add itself to your Windows Startup.
 
 ---
 
