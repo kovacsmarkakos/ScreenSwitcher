@@ -12,7 +12,6 @@
 - **Robust Networking**: Uses a burst-packet strategy (sending 5 packets across both ports 7 and 9) across all available network interfaces to ensure your TV wakes up reliably every time.
 - **Silent Background Operation**: Runs as a hidden process with no taskbar clutter.
 - **Auto-Startup**: Automatically registers with Windows to start when you log in.
-- **Self-Maintaining Logs**: Built-in `debug.log` with a strict 256KB rotation cap to keep your filesystem clean.
 
 ---
 
@@ -32,7 +31,7 @@ The program is customized via a `config.json` file located in the application di
 ```json
 {
   "EnableTvWake": true,
-  "TvMacAddress": "3C:F0:83:88:D2:50"
+  "TvMacAddress": "00:00:00:00:00:00"
 }
 ```
 
