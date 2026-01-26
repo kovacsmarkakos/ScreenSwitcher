@@ -24,7 +24,7 @@
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration for TV Power on functionality
 
 The program uses a `config.json` file for settings. To get started:
 1. Copy `config.json.template` to `config.json`.
@@ -49,7 +49,7 @@ The program uses a `config.json` file for settings. To get started:
 - An **LG OLED** or any Smart TV that supports Wake-on-LAN.
 
 ### 2. TV Preparation
-- Ensure your TV is connected to the same local network as your PC (Ethernet is recommended for highest reliability).
+- Ensure your TV is connected to the same local network as your PC.
 - Enable "Wake-on-LAN" or "Mobile/Network Power On" in your TV settings.
   - *LG TVs*: `Settings > General > Devices > External Devices > TV On With Mobile` -> **ON**.
 
