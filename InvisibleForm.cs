@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -41,6 +42,12 @@ namespace ScreenSwitcher
         /// </summary>
         private CancellationTokenSource? _pendingSwitch;
 
+        /// <summary>
+        /// Tray icon: the vehicle for "the TV did not come on" notifications (Windows shows a
+        /// balloon tip as a native toast), and the only way to quit that is not Task Manager.
+        /// </summary>
+        private NotifyIcon? _trayIcon;
+
         [DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vk);
 
@@ -64,6 +71,8 @@ namespace ScreenSwitcher
         {
             // Hide the form completely
             this.Hide();
+
+            CreateTrayIcon();
 
             // Read the config now rather than on the first hotkey, so the log records what the
             // app is actually running with at every launch.
@@ -120,9 +129,9 @@ namespace ScreenSwitcher
         }
 
         /// <summary>
-        /// Wakes the TV and waits for it to actually come up before handing it the desktop.
-        /// Firing DisplaySwitch.exe at the same moment as the magic packet used to leave the
-        /// switch racing a panel that needs several seconds to negotiate HDMI.
+        /// Wakes the TV and hands it the desktop only once it has actually come up. If it does
+        /// not, the desktop stays where it is and a notification says why: switching to a TV
+        /// that is off just blanks the monitor and leaves you guessing.
         /// </summary>
         private async Task SwitchToSecondScreenAsync(CancellationTokenSource supersede)
         {
@@ -133,11 +142,23 @@ namespace ScreenSwitcher
             {
                 AppConfig config = AppConfig.Instance;
 
+                // Defaults because the file was unreadable means the wake is off by accident.
+                // That is the one failure that looks exactly like a TV refusing to turn on, so
+                // refuse to switch and say so instead.
+                if (config.LoadError != null)
+                {
+                    Logger.Log($"Hotkey: second screen only. Not switching: {config.LoadError}.");
+                    Notify("ScreenSwitcher: not switching", $"{config.LoadError}. Fix the file and restart ScreenSwitcher.");
+                    return;
+                }
+
+                bool canWake = config.EnableTvWake && config.TvMacAddresses.Count > 0;
+
                 // Start knocking before asking whether the TV is up: the probe can take a second
                 // to conclude "no", and that second is better spent with packets in flight. The
                 // burst always completes, so cancelling this when the TV turns out to be on
                 // already leaves exactly the fire-and-forget wake this app started with.
-                if (config.EnableTvWake)
+                if (canWake)
                 {
                     wake = WakeOnLan.WakeAsync(config.TvMacAddresses, config.TvIp,
                         TimeSpan.FromSeconds(config.WakeTimeoutSeconds), wakeStop.Token);
@@ -146,31 +167,51 @@ namespace ScreenSwitcher
                 (bool present, string detail) = await IsTvOnAsync(config, supersede.Token).ConfigureAwait(false);
                 Logger.Log($"Hotkey: second screen only. {detail}. TV on: {present}.");
 
-                // With the wake disabled there is nothing coming, so waiting would only make the
-                // hotkey feel broken. Hand the switch straight to Windows as before.
-                if (!present && config.EnableTvWake)
+                if (!present)
                 {
-                    var stopwatch = Stopwatch.StartNew();
-                    present = await WaitForTvAsync(config, supersede.Token).ConfigureAwait(false);
-
-                    if (supersede.IsCancellationRequested)
+                    if (!config.EnableTvWake)
                     {
-                        Logger.Log("Superseded by a newer hotkey press; not switching.");
+                        // The user turned the wake off, so they are managing the TV themselves.
+                        // Nothing to wait for; hand the switch straight to Windows as before.
+                        Logger.Log("TV wake is disabled; switching without waiting.");
+                    }
+                    else if (!canWake)
+                    {
+                        Logger.Log("Not switching: EnableTvWake is on but no usable MAC address is configured.");
+                        Notify("ScreenSwitcher: not switching",
+                            "The TV is off and no MAC address is configured, so it cannot be woken. Check TvMacAddresses in config.json.");
                         return;
                     }
-
-                    if (present)
+                    else if (config.WakeTimeoutSeconds == 0)
                     {
+                        Logger.Log("WakeTimeoutSeconds is 0; switching without waiting for the TV.");
+                    }
+                    else
+                    {
+                        var stopwatch = Stopwatch.StartNew();
+                        present = await WaitForTvAsync(config, supersede.Token).ConfigureAwait(false);
+
+                        if (supersede.IsCancellationRequested)
+                        {
+                            Logger.Log("Superseded by a newer hotkey press; not switching.");
+                            return;
+                        }
+
+                        if (!present)
+                        {
+                            string target = config.TvIp != null ? $"{config.TvIp}" : "the display";
+                            Logger.Log($"Not switching: TV did not come up within {config.WakeTimeoutSeconds}s " +
+                                       $"(wake sent to {string.Join(", ", config.TvMacAddresses)}, no answer from {target}).");
+                            Notify("ScreenSwitcher: TV did not turn on",
+                                $"No answer from {target} within {config.WakeTimeoutSeconds}s after sending the wake packet. " +
+                                "Staying on the PC screen. See debug.log.");
+                            return;
+                        }
+
                         wakeStop.Cancel();
                         Logger.Log($"TV came up after {stopwatch.Elapsed.TotalSeconds:0.0}s; " +
                                    $"letting HDMI settle for {config.WakeSettleMs}ms.");
                         await Task.Delay(config.WakeSettleMs, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        // Switch anyway, which is what the app has always done and what Windows
-                        // safely tolerates. The log now says which half of this actually failed.
-                        Logger.Log($"TV did not come up within {config.WakeTimeoutSeconds}s; switching anyway.");
                     }
                 }
 
@@ -241,7 +282,7 @@ namespace ScreenSwitcher
             return false;
         }
 
-        private static void ApplyDisplayMode(string mode)
+        private void ApplyDisplayMode(string mode)
         {
             try
             {
@@ -251,7 +292,63 @@ namespace ScreenSwitcher
             catch (Exception ex)
             {
                 Logger.Log($"DisplaySwitch.exe {mode} failed: {ex.Message}");
-                MessageBox.Show($"Error switching screen: {ex.Message}");
+                Notify("ScreenSwitcher: could not switch display", ex.Message);
+            }
+        }
+
+        private void CreateTrayIcon()
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Open debug.log", null, (_, _) => OpenLog());
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Exit", null, (_, _) => Close());
+
+            Icon icon;
+            try
+            {
+                icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+            }
+            catch
+            {
+                icon = SystemIcons.Application;
+            }
+
+            _trayIcon = new NotifyIcon
+            {
+                Icon = icon,
+                Text = "ScreenSwitcher  (Ctrl+Shift+1: PC, Ctrl+Shift+2: TV)",
+                ContextMenuStrip = menu,
+                Visible = true
+            };
+        }
+
+        /// <summary>
+        /// Shows a balloon on the tray icon, which Windows 10/11 renders as a toast and keeps in
+        /// the notification centre. Safe to call from any thread.
+        /// </summary>
+        private void Notify(string title, string message)
+        {
+            if (_trayIcon == null || IsDisposed)
+                return;
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(() => Notify(title, message));
+                return;
+            }
+
+            _trayIcon.ShowBalloonTip(10000, title, message, ToolTipIcon.Warning);
+        }
+
+        private static void OpenLog()
+        {
+            try
+            {
+                using (Process.Start(new ProcessStartInfo(Logger.LogPath) { UseShellExecute = true })) { }
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"Could not open the log: {ex.Message}");
             }
         }
 
@@ -313,6 +410,16 @@ namespace ScreenSwitcher
         {
             UnregisterHotKey(this.Handle, HOTKEY_ID_1);
             UnregisterHotKey(this.Handle, HOTKEY_ID_2);
+
+            // Take the icon down explicitly; otherwise Explorer keeps a ghost of it in the tray
+            // until the mouse passes over it.
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+                _trayIcon = null;
+            }
+
             base.OnFormClosing(e);
         }
     }

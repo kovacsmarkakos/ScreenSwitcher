@@ -51,6 +51,14 @@ namespace ScreenSwitcher
         /// <summary>Register the app in the per-user startup list. Ignored by Debug builds.</summary>
         public bool RegisterStartupEntry { get; set; } = true;
 
+        /// <summary>
+        /// Why these are the defaults rather than the user's settings, or null when the file
+        /// loaded cleanly. A hotkey press surfaces this instead of quietly switching without
+        /// a wake, which is indistinguishable from the TV refusing to turn on.
+        /// </summary>
+        [JsonIgnore]
+        public string? LoadError { get; private set; }
+
         private static readonly string ConfigPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json");
 
         private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions
@@ -81,14 +89,14 @@ namespace ScreenSwitcher
                 if (!File.Exists(ConfigPath))
                 {
                     Logger.Log($"No config.json beside the executable ({ConfigPath}); using defaults, TV wake is off.");
-                    return new AppConfig();
+                    return new AppConfig { LoadError = "config.json not found next to ScreenSwitcher.exe" };
                 }
 
                 AppConfig? config = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), SerializerOptions);
                 if (config == null)
                 {
                     Logger.Log("config.json is empty; using defaults, TV wake is off.");
-                    return new AppConfig();
+                    return new AppConfig { LoadError = "config.json is empty" };
                 }
 
                 config.Normalize();
@@ -103,7 +111,7 @@ namespace ScreenSwitcher
                 // This used to fall back to defaults in silence, which looks exactly like the TV
                 // refusing to wake. Say which one it actually was.
                 Logger.Log($"Could not read config.json ({ex.Message}); using defaults, TV wake is off.");
-                return new AppConfig();
+                return new AppConfig { LoadError = $"config.json could not be read: {ex.Message}" };
             }
         }
 

@@ -9,7 +9,7 @@ namespace ScreenSwitcher
     /// </summary>
     public static class Logger
     {
-        private static readonly string LogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log");
+        public static readonly string LogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log");
         private const long MaxLogSize = 256 * 1024; // 256KB
         private static readonly object Gate = new object();
 
