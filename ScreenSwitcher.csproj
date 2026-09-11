@@ -6,9 +6,12 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>ScreenSwitcher.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Also embedded, so the tray icon can pick the exact small size rather than downscaling the 32px one. -->
+    <EmbeddedResource Include="ScreenSwitcher.ico" LogicalName="ScreenSwitcher.ico" />
     <None Include="config.json.template">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
