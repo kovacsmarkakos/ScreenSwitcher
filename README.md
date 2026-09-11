@@ -11,7 +11,7 @@
 - **Verified Switching**: Rather than firing the display switch at the same moment as the wake packet, it asks the TV whether it is actually up — over the network — and only then switches. If the TV never answers, **it stays on the PC screen and tells you why** with a Windows notification, instead of blanking your monitor for a TV that is off.
 - **Sustained Wake**: Opens with a tight burst and then keeps re-sending for the whole wake window, because a TV in standby runs its network interface at very low power and drops packets.
 - **Wi‑Fi-aware Delivery**: Sends the magic packet as a unicast to the TV's own address as well as by broadcast. An access point holds unicast frames for a dozing Wi‑Fi client and flags them in the beacon, whereas broadcasts are only flushed at DTIM and are routinely dropped.
-- **Silent Background Operation**: Runs hidden, with a single tray icon for notifications, opening the log, and exiting.
+- **Silent Background Operation**: Runs hidden, with a single tray icon for opening the log and exiting. Problems are reported as Windows notifications that stay in the notification centre until you dismiss them.
 - **Auto-Startup**: Registers with Windows to start when you log in (Release builds only, and only when enabled in config).
 
 ---
@@ -75,7 +75,7 @@ If you have deliberately set `EnableTvWake` to `false`, none of this applies: th
 ## 🛠️ Setup & Requirements
 
 ### 1. Prerequisites
-- **.NET 10.0 Runtime** (Windows)
+- **.NET 10.0 Runtime** (Windows 10 1809 or later; notifications use the Windows toast API)
 - An **LG OLED** or any Smart TV that supports Wake-on-LAN.
 
 ### 2. TV Preparation
