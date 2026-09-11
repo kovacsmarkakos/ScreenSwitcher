@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -303,10 +304,14 @@ namespace ScreenSwitcher
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => Close());
 
+            // The .ico carries 16 to 256px images; ask for the tray's own size so Windows does
+            // not have to downscale the 32px one. Falls back to the stock app icon if the
+            // resource is somehow missing.
             Icon icon;
             try
             {
-                icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+                using Stream? stream = typeof(InvisibleForm).Assembly.GetManifestResourceStream("ScreenSwitcher.ico");
+                icon = stream != null ? new Icon(stream, SystemInformation.SmallIconSize) : SystemIcons.Application;
             }
             catch
             {
