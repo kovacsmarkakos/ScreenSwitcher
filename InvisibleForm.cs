@@ -74,7 +74,6 @@ namespace ScreenSwitcher
             this.Hide();
 
             CreateTrayIcon();
-            Toast.Register();
 
             // Read the config now rather than on the first hotkey, so the log records what the
             // app is actually running with at every launch.
@@ -329,12 +328,12 @@ namespace ScreenSwitcher
         }
 
         /// <summary>
-        /// Shows a Windows toast that stays in the notification centre until dismissed; falls
-        /// back to a tray balloon if the toast API is unavailable. Safe to call from any thread.
+        /// Shows a balloon on the tray icon, which Windows 10/11 renders as a toast and keeps in
+        /// the notification centre. Safe to call from any thread.
         /// </summary>
         private void Notify(string title, string message)
         {
-            if (IsDisposed)
+            if (_trayIcon == null || IsDisposed)
                 return;
 
             if (InvokeRequired)
@@ -343,8 +342,7 @@ namespace ScreenSwitcher
                 return;
             }
 
-            if (!Toast.Show(title, message))
-                _trayIcon?.ShowBalloonTip(10000, title, message, ToolTipIcon.Warning);
+            _trayIcon.ShowBalloonTip(10000, title, message, ToolTipIcon.Warning);
         }
 
         private static void OpenLog()
