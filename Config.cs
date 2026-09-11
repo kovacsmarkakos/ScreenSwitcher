@@ -48,6 +48,9 @@ namespace ScreenSwitcher
         /// <summary>Grace period after the TV appears, so HDMI can finish negotiating.</summary>
         public int WakeSettleMs { get; set; } = 1500;
 
+        /// <summary>How long the "not switching" notice stays on screen unless clicked away.</summary>
+        public int NotificationSeconds { get; set; } = 30;
+
         /// <summary>Register the app in the per-user startup list. Ignored by Debug builds.</summary>
         public bool RegisterStartupEntry { get; set; } = true;
 
@@ -141,6 +144,7 @@ namespace ScreenSwitcher
             TvDisplayName = (TvDisplayName ?? "").Trim();
             WakeTimeoutSeconds = Math.Clamp(WakeTimeoutSeconds, 0, 120);
             WakeSettleMs = Math.Clamp(WakeSettleMs, 0, 30000);
+            NotificationSeconds = Math.Clamp(NotificationSeconds, 3, 600);
         }
 
         private static void AddMac(List<string> target, string? mac)

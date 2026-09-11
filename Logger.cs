@@ -13,6 +13,19 @@ namespace ScreenSwitcher
         private const long MaxLogSize = 256 * 1024; // 256KB
         private static readonly object Gate = new object();
 
+        /// <summary>Opens the log in whatever handles .log files.</summary>
+        public static void Open()
+        {
+            try
+            {
+                using (System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(LogPath) { UseShellExecute = true })) { }
+            }
+            catch (Exception ex)
+            {
+                Log($"Could not open the log: {ex.Message}");
+            }
+        }
+
         public static void Log(string message)
         {
             // Wake packets are sent from a background thread while the message loop logs too,

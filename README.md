@@ -11,7 +11,7 @@
 - **Verified Switching**: Rather than firing the display switch at the same moment as the wake packet, it asks the TV whether it is actually up — over the network — and only then switches. If the TV never answers, **it stays on the PC screen and tells you why** with a Windows notification, instead of blanking your monitor for a TV that is off.
 - **Sustained Wake**: Opens with a tight burst and then keeps re-sending for the whole wake window, because a TV in standby runs its network interface at very low power and drops packets.
 - **Wi‑Fi-aware Delivery**: Sends the magic packet as a unicast to the TV's own address as well as by broadcast. An access point holds unicast frames for a dozing Wi‑Fi client and flags them in the beacon, whereas broadcasts are only flushed at DTIM and are routinely dropped.
-- **Silent Background Operation**: Runs hidden, with a single tray icon for notifications, opening the log, and exiting.
+- **Silent Background Operation**: Runs hidden, with a single tray icon for opening the log and exiting. When it refuses to switch, a small notice appears in the corner of the screen and stays until you click it or `NotificationSeconds` pass — long enough to actually read, unlike a system balloon.
 - **Auto-Startup**: Registers with Windows to start when you log in (Release builds only, and only when enabled in config).
 
 ---
@@ -42,6 +42,7 @@ The program reads `config.json` **from the folder containing `ScreenSwitcher.exe
   "TvDisplayName": "",
   "WakeTimeoutSeconds": 20,
   "WakeSettleMs": 1500,
+  "NotificationSeconds": 30,
   "RegisterStartupEntry": true
 }
 ```
@@ -54,6 +55,7 @@ The program reads `config.json` **from the folder containing `ScreenSwitcher.exe
 | `TvDisplayName` | Fallback used only when no `TvIpAddress` is set: the TV's name as Windows reports it, e.g. `LG TV SSCR2` (a substring is enough). The switch then waits for this display to appear. Left empty as well, it waits for any display beyond the one already in use. **Some TVs keep the HDMI link asserted in standby, which makes this signal useless for them** — that is what `TvIpAddress` is for. |
 | `WakeTimeoutSeconds` | How long to keep waking and waiting for the TV. If it has not answered by then, the switch is **not** made and a notification explains why. `0` disables the wait and switches immediately. Clamped to 0–120. |
 | `WakeSettleMs` | Grace period after the TV answers, so HDMI can finish negotiating. Clamped to 0–30000. |
+| `NotificationSeconds` | How long the "not switching" notice stays on screen unless clicked away. Default 30. Clamped to 3–600. |
 | `RegisterStartupEntry` | Whether to add the app to the per-user startup list. Ignored by Debug builds, which never register themselves. |
 
 The older single-MAC form (`"TvMacAddress": "..."`) is still read and merged in, so existing config files keep working.
@@ -62,7 +64,7 @@ Every load is written to `debug.log` next to the executable, along with the outc
 
 ### When it refuses to switch
 
-`Shift + Ctrl + 2` will leave you on the PC screen and show a notification saying why in three situations, each also written to the log:
+`Shift + Ctrl + 2` will leave you on the PC screen and show a notice in the corner saying why in three situations, each also written to the log:
 
 - **The TV did not answer** within `WakeTimeoutSeconds` after the wake packets went out. The most common cause is the TV having dropped off the network in standby — see *Quick Start+* below.
 - **`config.json` could not be read.** A typo in the file used to silently turn the wake off, which looks exactly like a TV refusing to turn on. Now it says so. Fix the file and restart.

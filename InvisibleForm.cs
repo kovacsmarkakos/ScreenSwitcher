@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,8 +43,7 @@ namespace ScreenSwitcher
         private CancellationTokenSource? _pendingSwitch;
 
         /// <summary>
-        /// Tray icon: the vehicle for "the TV did not come on" notifications (Windows shows a
-        /// balloon tip as a native toast), and the only way to quit that is not Task Manager.
+        /// Tray icon: a way to open the log and to quit that is not Task Manager.
         /// </summary>
         private NotifyIcon? _trayIcon;
 
@@ -300,27 +298,13 @@ namespace ScreenSwitcher
         private void CreateTrayIcon()
         {
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Open debug.log", null, (_, _) => OpenLog());
+            menu.Items.Add("Open debug.log", null, (_, _) => Logger.Open());
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Exit", null, (_, _) => Close());
 
-            // The .ico carries 16 to 256px images; ask for the tray's own size so Windows does
-            // not have to downscale the 32px one. Falls back to the stock app icon if the
-            // resource is somehow missing.
-            Icon icon;
-            try
-            {
-                using Stream? stream = typeof(InvisibleForm).Assembly.GetManifestResourceStream("ScreenSwitcher.ico");
-                icon = stream != null ? new Icon(stream, SystemInformation.SmallIconSize) : SystemIcons.Application;
-            }
-            catch
-            {
-                icon = SystemIcons.Application;
-            }
-
             _trayIcon = new NotifyIcon
             {
-                Icon = icon,
+                Icon = AppIcon.Load(SystemInformation.SmallIconSize),
                 Text = "ScreenSwitcher  (Ctrl+Shift+1: PC, Ctrl+Shift+2: TV)",
                 ContextMenuStrip = menu,
                 Visible = true
@@ -328,12 +312,11 @@ namespace ScreenSwitcher
         }
 
         /// <summary>
-        /// Shows a balloon on the tray icon, which Windows 10/11 renders as a toast and keeps in
-        /// the notification centre. Safe to call from any thread.
+        /// Shows the corner notice for as long as the config says. Safe to call from any thread.
         /// </summary>
         private void Notify(string title, string message)
         {
-            if (_trayIcon == null || IsDisposed)
+            if (IsDisposed)
                 return;
 
             if (InvokeRequired)
@@ -342,19 +325,7 @@ namespace ScreenSwitcher
                 return;
             }
 
-            _trayIcon.ShowBalloonTip(10000, title, message, ToolTipIcon.Warning);
-        }
-
-        private static void OpenLog()
-        {
-            try
-            {
-                using (Process.Start(new ProcessStartInfo(Logger.LogPath) { UseShellExecute = true })) { }
-            }
-            catch (Exception ex)
-            {
-                Logger.Log($"Could not open the log: {ex.Message}");
-            }
+            NotificationWindow.Show(title, message, AppConfig.Instance.NotificationSeconds);
         }
 
         private void SetStartup()
