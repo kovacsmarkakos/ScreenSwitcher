@@ -24,17 +24,18 @@ namespace ScreenSwitcher
         // for it to reliably hear us.
         private const int RetryIntervalMs = 500;
 
-        public static Task WakeAsync(IReadOnlyList<string> macAddresses, TimeSpan duration, CancellationToken cancellationToken)
+        public static Task WakeAsync(IReadOnlyList<string> macAddresses, IPAddress? unicastTarget, TimeSpan duration, CancellationToken cancellationToken)
         {
-            return Task.Run(() => Wake(macAddresses, duration, cancellationToken));
+            return Task.Run(() => Wake(macAddresses, unicastTarget, duration, cancellationToken));
         }
 
         /// <summary>
         /// Sends magic packets to every configured MAC until <paramref name="duration"/> elapses
         /// or the caller cancels (normally because the TV has come up). The opening burst is
-        /// always sent in full, so a zero duration still behaves like a plain fire-and-forget wake.
+        /// always sent in full whatever happens, so a zero duration or an immediate cancel still
+        /// behaves like the plain fire-and-forget wake this started as.
         /// </summary>
-        public static void Wake(IReadOnlyList<string> macAddresses, TimeSpan duration, CancellationToken cancellationToken)
+        public static void Wake(IReadOnlyList<string> macAddresses, IPAddress? unicastTarget, TimeSpan duration, CancellationToken cancellationToken)
         {
             var packets = new List<KeyValuePair<string, byte[]>>();
             foreach (string mac in macAddresses)
@@ -58,7 +59,8 @@ namespace ScreenSwitcher
             foreach (var entry in packets)
                 macList.Add(entry.Key);
 
-            Logger.Log($"Waking {string.Join(", ", macList)} for up to {duration.TotalSeconds:0.#}s.");
+            string via = unicastTarget == null ? "broadcast" : $"broadcast + unicast to {unicastTarget}";
+            Logger.Log($"Waking {string.Join(", ", macList)} via {via} for up to {duration.TotalSeconds:0.#}s.");
 
             DateTime deadline = DateTime.UtcNow + duration;
             int round = 0;
@@ -70,17 +72,19 @@ namespace ScreenSwitcher
                     foreach (int port in Ports)
                     {
                         // Only the first round is logged; the rest are identical by construction.
-                        SendMagicPacket(entry.Value, port, round == 0);
+                        SendMagicPacket(entry.Value, port, unicastTarget, round == 0);
                     }
                 }
                 round++;
 
-                if (cancellationToken.IsCancellationRequested)
-                    break;
-                if (round >= InitialBurstRounds && DateTime.UtcNow >= deadline)
+                // Cancellation and the deadline only count once the opening burst is out.
+                bool burstDone = round >= InitialBurstRounds;
+                if (burstDone && (cancellationToken.IsCancellationRequested || DateTime.UtcNow >= deadline))
                     break;
 
-                if (!Sleep(round < InitialBurstRounds ? InitialBurstIntervalMs : RetryIntervalMs, cancellationToken))
+                if (!burstDone)
+                    Thread.Sleep(InitialBurstIntervalMs);
+                else if (!Sleep(RetryIntervalMs, cancellationToken))
                     break;
             }
 
@@ -120,8 +124,29 @@ namespace ScreenSwitcher
             return true;
         }
 
-        private static void SendMagicPacket(byte[] magicPacket, int port, bool shouldLog)
+        private static void SendMagicPacket(byte[] magicPacket, int port, IPAddress? unicastTarget, bool shouldLog)
         {
+            // Straight to the TV's own address. On Wi-Fi this is the delivery that actually gets
+            // through: the access point holds unicast frames for a dozing client and flags them in
+            // the beacon, whereas broadcasts are only flushed at DTIM and are routinely dropped.
+            // Needs the TV in the ARP cache; in standby the Wi-Fi chip still answers ARP, so it is.
+            if (unicastTarget != null)
+            {
+                try
+                {
+                    using (UdpClient client = new UdpClient(unicastTarget.AddressFamily))
+                    {
+                        client.Connect(unicastTarget, port);
+                        client.Send(magicPacket, magicPacket.Length);
+                        if (shouldLog) Logger.Log($"Sent packet to {unicastTarget} on port {port}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (shouldLog) Logger.Log($"Error sending to {unicastTarget} port {port}: {ex.Message}");
+                }
+            }
+
             // Send to 255.255.255.255 (Limited Broadcast)
             try
             {

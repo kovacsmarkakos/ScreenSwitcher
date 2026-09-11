@@ -29,7 +29,11 @@ namespace ScreenSwitcher
         private const string StartupValueName = "ScreenSwitcher";
         private const string StartupKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
 
-        private const int DisplayPollIntervalMs = 500;
+        // How long a network probe waits for the TV to answer, and how long to pause between
+        // probes while waiting for it to boot. A TV that is on answers in milliseconds; only a
+        // silent one costs the full timeout.
+        private const int TvProbeTimeoutMs = 1000;
+        private const int TvPollIntervalMs = 250;
 
         /// <summary>
         /// The switch that is still waiting for the TV, if any. Set from the message loop and
@@ -129,23 +133,25 @@ namespace ScreenSwitcher
             {
                 AppConfig config = AppConfig.Instance;
 
-                bool present = DisplayTargets.IsTvPresent(config.TvDisplayName, out string detail);
-                Logger.Log($"Hotkey: second screen only. Available displays: {detail}. TV present: {present}.");
-
+                // Start knocking before asking whether the TV is up: the probe can take a second
+                // to conclude "no", and that second is better spent with packets in flight. The
+                // burst always completes, so cancelling this when the TV turns out to be on
+                // already leaves exactly the fire-and-forget wake this app started with.
                 if (config.EnableTvWake)
                 {
-                    // Already up: the same short burst as before, and switch straight away.
-                    // Not up: keep knocking for the whole wait.
-                    TimeSpan window = present ? TimeSpan.Zero : TimeSpan.FromSeconds(config.WakeTimeoutSeconds);
-                    wake = WakeOnLan.WakeAsync(config.TvMacAddresses, window, wakeStop.Token);
+                    wake = WakeOnLan.WakeAsync(config.TvMacAddresses, config.TvIp,
+                        TimeSpan.FromSeconds(config.WakeTimeoutSeconds), wakeStop.Token);
                 }
+
+                (bool present, string detail) = await IsTvOnAsync(config, supersede.Token).ConfigureAwait(false);
+                Logger.Log($"Hotkey: second screen only. {detail}. TV on: {present}.");
 
                 // With the wake disabled there is nothing coming, so waiting would only make the
                 // hotkey feel broken. Hand the switch straight to Windows as before.
                 if (!present && config.EnableTvWake)
                 {
                     var stopwatch = Stopwatch.StartNew();
-                    present = await WaitForSecondScreenAsync(config, supersede.Token).ConfigureAwait(false);
+                    present = await WaitForTvAsync(config, supersede.Token).ConfigureAwait(false);
 
                     if (supersede.IsCancellationRequested)
                     {
@@ -156,7 +162,7 @@ namespace ScreenSwitcher
                     if (present)
                     {
                         wakeStop.Cancel();
-                        Logger.Log($"TV became available after {stopwatch.Elapsed.TotalSeconds:0.0}s; " +
+                        Logger.Log($"TV came up after {stopwatch.Elapsed.TotalSeconds:0.0}s; " +
                                    $"letting HDMI settle for {config.WakeSettleMs}ms.");
                         await Task.Delay(config.WakeSettleMs, CancellationToken.None).ConfigureAwait(false);
                     }
@@ -164,7 +170,7 @@ namespace ScreenSwitcher
                     {
                         // Switch anyway, which is what the app has always done and what Windows
                         // safely tolerates. The log now says which half of this actually failed.
-                        Logger.Log($"TV did not become available within {config.WakeTimeoutSeconds}s; switching anyway.");
+                        Logger.Log($"TV did not come up within {config.WakeTimeoutSeconds}s; switching anyway.");
                     }
                 }
 
@@ -182,6 +188,8 @@ namespace ScreenSwitcher
             }
             finally
             {
+                // Stop knocking (the opening burst still completes) and let the wake unwind
+                // before its token source goes away.
                 wakeStop.Cancel();
                 try { await wake.ConfigureAwait(false); } catch { }
 
@@ -190,7 +198,27 @@ namespace ScreenSwitcher
             }
         }
 
-        private static async Task<bool> WaitForSecondScreenAsync(AppConfig config, CancellationToken cancellationToken)
+        /// <summary>
+        /// Whether the TV is awake, and a note for the log saying how we know. Asks the TV over
+        /// the network when its IP is configured, since this TV keeps HDMI hot-plug asserted in
+        /// standby and so always looks "connected" to Windows; falls back to the display check
+        /// otherwise.
+        /// </summary>
+        private static async Task<(bool On, string Detail)> IsTvOnAsync(AppConfig config, CancellationToken cancellationToken)
+        {
+            if (config.TvIp != null)
+            {
+                string? answeredBy = await TvProbe.ProbeAsync(config.TvIp, TvProbeTimeoutMs, cancellationToken).ConfigureAwait(false);
+                return answeredBy != null
+                    ? (true, $"TV {config.TvIp} answered on {answeredBy}")
+                    : (false, $"TV {config.TvIp} silent for {TvProbeTimeoutMs}ms");
+            }
+
+            bool present = DisplayTargets.IsTvPresent(config.TvDisplayName, out string displays);
+            return (present, $"Available displays: {displays}");
+        }
+
+        private static async Task<bool> WaitForTvAsync(AppConfig config, CancellationToken cancellationToken)
         {
             DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(config.WakeTimeoutSeconds);
 
@@ -198,14 +226,15 @@ namespace ScreenSwitcher
             {
                 try
                 {
-                    await Task.Delay(DisplayPollIntervalMs, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TvPollIntervalMs, cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     return false;
                 }
 
-                if (DisplayTargets.IsTvPresent(config.TvDisplayName, out _))
+                (bool on, _) = await IsTvOnAsync(config, cancellationToken).ConfigureAwait(false);
+                if (on)
                     return true;
             }
 

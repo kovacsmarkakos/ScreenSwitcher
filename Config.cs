@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ScreenSwitcher
 {
@@ -21,9 +23,22 @@ namespace ScreenSwitcher
         public string? TvMacAddress { get; set; }
 
         /// <summary>
+        /// The TV's IP address. Give it a DHCP reservation on the router so it stays put. When
+        /// set, "is the TV on" is asked of the TV itself over the network, and a unicast magic
+        /// packet is sent here alongside the broadcasts; both matter for a TV on Wi-Fi.
+        /// </summary>
+        public string TvIpAddress { get; set; } = "";
+
+        /// <summary>Parsed form of <see cref="TvIpAddress"/>; null when unset or invalid.</summary>
+        [JsonIgnore]
+        public IPAddress? TvIp { get; private set; }
+
+        /// <summary>
         /// The TV's name as Windows reports it, e.g. "LG TV SSCR2" (a substring is enough).
-        /// When set, the switch waits for exactly this display. Left empty, it waits for any
-        /// display beyond the one already in use.
+        /// Only used when no <see cref="TvIpAddress"/> is set: the switch then waits for this
+        /// display to show up. Left empty as well, it waits for any display beyond the one
+        /// already in use. Some TVs keep the HDMI link asserted in standby, which makes this
+        /// signal useless for them; that is what the IP probe is for.
         /// </summary>
         public string TvDisplayName { get; set; } = "";
 
@@ -79,7 +94,7 @@ namespace ScreenSwitcher
                 config.Normalize();
                 Logger.Log($"Loaded config.json: EnableTvWake={config.EnableTvWake}, " +
                            $"MACs=[{string.Join(", ", config.TvMacAddresses)}], " +
-                           $"TvDisplayName='{config.TvDisplayName}', " +
+                           $"TvIpAddress='{config.TvIpAddress}', TvDisplayName='{config.TvDisplayName}', " +
                            $"WakeTimeoutSeconds={config.WakeTimeoutSeconds}, WakeSettleMs={config.WakeSettleMs}.");
                 return config;
             }
@@ -105,6 +120,15 @@ namespace ScreenSwitcher
 
             if (EnableTvWake && merged.Count == 0)
                 Logger.Log("EnableTvWake is on but no usable MAC address is configured.");
+
+            TvIpAddress = (TvIpAddress ?? "").Trim();
+            if (TvIpAddress.Length > 0)
+            {
+                if (IPAddress.TryParse(TvIpAddress, out IPAddress? ip))
+                    TvIp = ip;
+                else
+                    Logger.Log($"Ignoring malformed TvIpAddress '{TvIpAddress}'; falling back to the display check.");
+            }
 
             TvDisplayName = (TvDisplayName ?? "").Trim();
             WakeTimeoutSeconds = Math.Clamp(WakeTimeoutSeconds, 0, 120);
