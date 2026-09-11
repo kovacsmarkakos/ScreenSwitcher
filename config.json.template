@@ -1,4 +1,8 @@
 {
   "EnableTvWake": true,
-  "TvMacAddress": "00:00:00:00:00:00"
+  "TvMacAddresses": [ "00:00:00:00:00:00" ],
+  "TvDisplayName": "",
+  "WakeTimeoutSeconds": 20,
+  "WakeSettleMs": 1500,
+  "RegisterStartupEntry": true
 }
