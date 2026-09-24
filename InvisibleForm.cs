@@ -15,6 +15,7 @@ namespace ScreenSwitcher
         private const int MOD_ALT = 0x0001;
         private const int MOD_CONTROL = 0x0002;
         private const int MOD_SHIFT = 0x0004;
+        private const int MOD_NOREPEAT = 0x4000;
         private const int WM_HOTKEY = 0x0312;
         private const int VK_1 = 0x31;
         private const int VK_2 = 0x32;
@@ -30,9 +31,11 @@ namespace ScreenSwitcher
         private const string StartupValueName = "ScreenSwitcher";
         private const string StartupKeyPath = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
 
-        // How long a network probe waits for the TV to answer, and how long to pause between
-        // probes while waiting for it to boot. A TV that is on answers in milliseconds; only a
-        // silent one costs the full timeout.
+        // A TV that is already on answers in a few milliseconds (2-13ms measured), so the first
+        // "is it on?" check only needs a short window; anything slower is treated as off and the
+        // wait below takes over. While waiting, a new probe starts every TvPollIntervalMs and
+        // each one gives up after TvProbeTimeoutMs; they overlap.
+        private const int TvQuickCheckMs = 300;
         private const int TvProbeTimeoutMs = 1000;
         private const int TvPollIntervalMs = 250;
 
@@ -47,7 +50,7 @@ namespace ScreenSwitcher
         /// </summary>
         private NotifyIcon? _trayIcon;
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, int vk);
 
         [DllImport("user32.dll")]
@@ -75,14 +78,53 @@ namespace ScreenSwitcher
 
             // Read the config now rather than on the first hotkey, so the log records what the
             // app is actually running with at every launch.
-            _ = AppConfig.Instance;
+            AppConfig config = AppConfig.Instance;
+            LogArpPin(config);
 
-            // Register hotkeys
-            // Shift + Ctrl + 1
-            RegisterHotKey(this.Handle, HOTKEY_ID_1, MOD_CONTROL | MOD_SHIFT, VK_1);
+            // Register hotkeys. MOD_NOREPEAT stops a held-down key from firing again and again.
+            // If another app already owns a combination, registration fails and that hotkey is dead
+            // for as long as we run, so say so rather than leaving it to look broken.
+            var failed = new List<string>();
+            if (!RegisterHotKey(this.Handle, HOTKEY_ID_1, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_1))
+                failed.Add("Ctrl+Shift+1");
+            if (!RegisterHotKey(this.Handle, HOTKEY_ID_2, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_2))
+                failed.Add("Ctrl+Shift+2");
 
-            // Shift + Ctrl + 2
-            RegisterHotKey(this.Handle, HOTKEY_ID_2, MOD_CONTROL | MOD_SHIFT, VK_2);
+            if (failed.Count > 0)
+            {
+                string keys = string.Join(" and ", failed);
+                Logger.Log($"Could not register {keys} (error {Marshal.GetLastWin32Error()}); another app probably owns it.");
+                Notify("ScreenSwitcher: hotkey unavailable",
+                    $"{keys} is already taken by another app, so it will do nothing until that app releases it and ScreenSwitcher restarts.");
+            }
+        }
+
+        /// <summary>
+        /// Records at launch whether the TV's ARP entry is pinned. Losing the pin (a network reset,
+        /// a new adapter) silently brings back the deep-standby failures, so say so up front.
+        /// </summary>
+        private static void LogArpPin(AppConfig config)
+        {
+            if (!config.EnableTvWake || config.TvIp == null || config.TvMacAddresses.Count == 0)
+                return;
+
+            ArpEntry arp = ArpEntry.Lookup(config.TvIp);
+            string mac = config.TvMacAddresses[0];
+
+            if (!arp.IsPermanent)
+            {
+                Logger.Log($"TV ARP entry for {config.TvIp} is {arp}, not pinned. Wakes from deep standby will be unreliable. " +
+                           $"Fix: {ArpEntry.PinCommand(config.TvIp, mac)}");
+            }
+            else if (arp.Mac != null && !string.Equals(arp.Mac, mac, StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.Log($"TV ARP entry for {config.TvIp} is pinned to {arp.Mac}, but the configured MAC is {mac}. " +
+                           $"Unicast wakes are going to the wrong device. Fix: {ArpEntry.PinCommand(config.TvIp, mac)}");
+            }
+            else
+            {
+                Logger.Log($"TV ARP entry for {config.TvIp} is pinned to {arp.Mac}.");
+            }
         }
 
         protected override void WndProc(ref Message m)
@@ -153,17 +195,24 @@ namespace ScreenSwitcher
 
                 bool canWake = config.EnableTvWake && config.TvMacAddresses.Count > 0;
 
-                // Start knocking before asking whether the TV is up: the probe can take a second
-                // to conclude "no", and that second is better spent with packets in flight. The
-                // burst always completes, so cancelling this when the TV turns out to be on
-                // already leaves exactly the fire-and-forget wake this app started with.
+                // One clock for the whole attempt: the wake and the wait both run against it, so
+                // packets keep going out for as long as we are still listening for an answer.
+                var sincePress = Stopwatch.StartNew();
+                DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(config.WakeTimeoutSeconds);
+
+                // Start knocking before asking whether the TV is up, so the quick check below is
+                // spent with packets in flight. The wake is sized to outlast the final probe and is
+                // cancelled the moment the wait concludes either way; its opening burst always
+                // completes, so a TV that turns out to be on already gets exactly the
+                // fire-and-forget wake this app started with.
                 if (canWake)
                 {
                     wake = WakeOnLan.WakeAsync(config.TvMacAddresses, config.TvIp,
-                        TimeSpan.FromSeconds(config.WakeTimeoutSeconds), wakeStop.Token);
+                        TimeSpan.FromSeconds(config.WakeTimeoutSeconds) + TimeSpan.FromMilliseconds(TvProbeTimeoutMs),
+                        wakeStop.Token);
                 }
 
-                (bool present, string detail) = await IsTvOnAsync(config, supersede.Token).ConfigureAwait(false);
+                (bool present, string detail) = await IsTvOnAsync(config, TvQuickCheckMs, supersede.Token).ConfigureAwait(false);
                 Logger.Log($"Hotkey: second screen only. {detail}. TV on: {present}.");
 
                 if (!present)
@@ -187,8 +236,7 @@ namespace ScreenSwitcher
                     }
                     else
                     {
-                        var stopwatch = Stopwatch.StartNew();
-                        present = await WaitForTvAsync(config, supersede.Token).ConfigureAwait(false);
+                        string? answeredBy = await WaitForTvAsync(config, deadline, supersede.Token).ConfigureAwait(false);
 
                         if (supersede.IsCancellationRequested)
                         {
@@ -196,19 +244,25 @@ namespace ScreenSwitcher
                             return;
                         }
 
-                        if (!present)
+                        if (answeredBy == null)
                         {
                             string target = config.TvIp != null ? $"{config.TvIp}" : "the display";
                             Logger.Log($"Not switching: TV did not come up within {config.WakeTimeoutSeconds}s " +
                                        $"(wake sent to {string.Join(", ", config.TvMacAddresses)}, no answer from {target}).");
+
+                            // The one cause the app can see for itself: the unicast wake could not be
+                            // addressed. Worth pointing at, since it is the fix that worked.
+                            string hint = config.TvIp != null && !ArpEntry.Lookup(config.TvIp).IsPermanent
+                                ? " The TV's ARP entry is not pinned, which makes this much more likely; the fix is in debug.log."
+                                : " See debug.log.";
                             Notify("ScreenSwitcher: TV did not turn on",
                                 $"No answer from {target} within {config.WakeTimeoutSeconds}s after sending the wake packet. " +
-                                "Staying on the PC screen. See debug.log.");
+                                "Staying on the PC screen." + hint);
                             return;
                         }
 
                         wakeStop.Cancel();
-                        Logger.Log($"TV came up after {stopwatch.Elapsed.TotalSeconds:0.0}s; " +
+                        Logger.Log($"TV answered on {answeredBy} {sincePress.Elapsed.TotalSeconds:0.0}s after the first wake packet; " +
                                    $"letting HDMI settle for {config.WakeSettleMs}ms.");
                         await Task.Delay(config.WakeSettleMs, CancellationToken.None).ConfigureAwait(false);
                     }
@@ -244,41 +298,92 @@ namespace ScreenSwitcher
         /// standby and so always looks "connected" to Windows; falls back to the display check
         /// otherwise.
         /// </summary>
-        private static async Task<(bool On, string Detail)> IsTvOnAsync(AppConfig config, CancellationToken cancellationToken)
+        private static async Task<(bool On, string Detail)> IsTvOnAsync(AppConfig config, int timeoutMs, CancellationToken cancellationToken)
         {
             if (config.TvIp != null)
             {
-                string? answeredBy = await TvProbe.ProbeAsync(config.TvIp, TvProbeTimeoutMs, cancellationToken).ConfigureAwait(false);
+                string? answeredBy = await TvProbe.ProbeAsync(config.TvIp, timeoutMs, cancellationToken).ConfigureAwait(false);
                 return answeredBy != null
                     ? (true, $"TV {config.TvIp} answered on {answeredBy}")
-                    : (false, $"TV {config.TvIp} silent for {TvProbeTimeoutMs}ms");
+                    : (false, $"TV {config.TvIp} silent for {timeoutMs}ms");
             }
 
             bool present = DisplayTargets.IsTvPresent(config.TvDisplayName, out string displays);
             return (present, $"Available displays: {displays}");
         }
 
-        private static async Task<bool> WaitForTvAsync(AppConfig config, CancellationToken cancellationToken)
+        /// <summary>
+        /// Waits for the TV to answer, up to <paramref name="deadline"/>. Returns what it answered
+        /// on, or null if it never did (or a newer press cancelled the wait).
+        ///
+        /// A fresh probe starts every <see cref="TvPollIntervalMs"/> without waiting for the last
+        /// one to give up. Each probe can hang for up to a second on a silent TV, so running them
+        /// back to back meant a TV that woke mid-probe went unnoticed until the next one began;
+        /// overlapping them catches it within a quarter of a second.
+        /// </summary>
+        private static async Task<string?> WaitForTvAsync(AppConfig config, DateTime deadline, CancellationToken cancellationToken)
         {
-            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(config.WakeTimeoutSeconds);
-
-            while (DateTime.UtcNow < deadline)
+            if (config.TvIp == null)
             {
-                try
+                // Display fallback: a cheap synchronous check, so a plain poll is enough.
+                while (DateTime.UtcNow < deadline)
                 {
-                    await Task.Delay(TvPollIntervalMs, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return false;
-                }
+                    try { await Task.Delay(TvPollIntervalMs, cancellationToken).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { return null; }
 
-                (bool on, _) = await IsTvOnAsync(config, cancellationToken).ConfigureAwait(false);
-                if (on)
-                    return true;
+                    if (DisplayTargets.IsTvPresent(config.TvDisplayName, out _))
+                        return "display";
+                }
+                return null;
             }
 
-            return false;
+            // Cancelled once we have an answer, so the probes still in flight stop straight away
+            // rather than holding up the switch. Deliberately not disposed here: those probes may
+            // still be unwinding against its token when this method returns.
+            var done = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var probes = new List<Task<string?>>();
+            DateTime nextProbe = DateTime.UtcNow;
+
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    DateTime now = DateTime.UtcNow;
+                    if (now < deadline && now >= nextProbe)
+                    {
+                        probes.Add(TvProbe.ProbeAsync(config.TvIp, TvProbeTimeoutMs, done.Token));
+                        nextProbe = now.AddMilliseconds(TvPollIntervalMs);
+                    }
+
+                    for (int i = probes.Count - 1; i >= 0; i--)
+                    {
+                        if (!probes[i].IsCompleted)
+                            continue;
+                        string? answer = probes[i].Status == TaskStatus.RanToCompletion ? probes[i].Result : null;
+                        if (answer != null)
+                            return answer;
+                        probes.RemoveAt(i);
+                    }
+
+                    // Past the deadline no new probes start; the ones already out still get to
+                    // finish, since the TV may be answering one of them right now.
+                    if (now >= deadline && probes.Count == 0)
+                        return null;
+
+                    var waitOn = new List<Task>(probes);
+                    if (now < deadline)
+                    {
+                        TimeSpan untilNext = (nextProbe < deadline ? nextProbe : deadline) - now;
+                        waitOn.Add(Task.Delay(untilNext > TimeSpan.Zero ? untilNext : TimeSpan.Zero, cancellationToken));
+                    }
+                    await Task.WhenAny(waitOn).ConfigureAwait(false);
+                }
+                return null;
+            }
+            finally
+            {
+                done.Cancel();
+            }
         }
 
         private void ApplyDisplayMode(string mode)

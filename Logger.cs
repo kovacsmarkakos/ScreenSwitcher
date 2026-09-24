@@ -10,6 +10,7 @@ namespace ScreenSwitcher
     public static class Logger
     {
         public static readonly string LogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.log");
+        private static readonly string OldLogPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "debug.old.log");
         private const long MaxLogSize = 256 * 1024; // 256KB
         private static readonly object Gate = new object();
 
@@ -34,10 +35,12 @@ namespace ScreenSwitcher
             {
                 try
                 {
+                    // Roll over rather than delete, so the history from just before the cap is still
+                    // there when you go looking for why something failed.
                     FileInfo info = new FileInfo(LogPath);
                     if (info.Exists && info.Length > MaxLogSize)
                     {
-                        File.Delete(LogPath);
+                        File.Move(LogPath, OldLogPath, overwrite: true);
                     }
 
                     File.AppendAllText(LogPath, string.Format(

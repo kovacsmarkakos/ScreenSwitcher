@@ -59,6 +59,19 @@ namespace ScreenSwitcher
             foreach (var entry in packets)
                 macList.Add(entry.Key);
 
+            // The socket call for the unicast packet succeeds whether or not Windows can actually
+            // address it, so the log has to say which one it is.
+            if (unicastTarget != null)
+            {
+                ArpEntry arp = ArpEntry.Lookup(unicastTarget);
+                if (arp.CanSendUnicast)
+                    Logger.Log($"Unicast to {unicastTarget}: ARP entry {arp}.");
+                else
+                    Logger.Log($"Unicast to {unicastTarget} will likely be dropped by Windows: ARP entry {arp}, " +
+                               "and a TV in deep standby does not answer ARP. Only the broadcasts will reach it. " +
+                               $"Fix: {ArpEntry.PinCommand(unicastTarget, macList[0])}");
+            }
+
             string via = unicastTarget == null ? "broadcast" : $"broadcast + unicast to {unicastTarget}";
             Logger.Log($"Waking {string.Join(", ", macList)} via {via} for up to {duration.TotalSeconds:0.#}s.");
 
@@ -129,7 +142,9 @@ namespace ScreenSwitcher
             // Straight to the TV's own address. On Wi-Fi this is the delivery that actually gets
             // through: the access point holds unicast frames for a dozing client and flags them in
             // the beacon, whereas broadcasts are only flushed at DTIM and are routinely dropped.
-            // Needs the TV in the ARP cache; in standby the Wi-Fi chip still answers ARP, so it is.
+            // Windows only sends this once it knows the TV's MAC. In light standby the TV answers
+            // ARP; in deep standby it does not, and without a Permanent ARP entry this packet is
+            // silently discarded (see ArpEntry). Wake() logs which case applies.
             if (unicastTarget != null)
             {
                 try
