@@ -60,7 +60,7 @@ The program reads `config.json` **from the folder containing `ScreenSwitcher.exe
 
 The older single-MAC form (`"TvMacAddress": "..."`) is still read and merged in, so existing config files keep working.
 
-Every load is written to `debug.log` next to the executable, along with the outcome of each switch — whether the TV answered and on what, how long it took to come up, and whether it came up at all. Right-click the tray icon to open it.
+Every load is written to `debug.log` next to the executable, along with the ARP pin status and the outcome of each switch — whether the unicast wake could be addressed, whether the TV answered and on what, how long after the first packet, and whether it came up at all. Right-click the tray icon to open it. At 256 KB the log rolls over to `debug.old.log`.
 
 ### When it refuses to switch
 
@@ -69,6 +69,8 @@ Every load is written to `debug.log` next to the executable, along with the outc
 - **The TV did not answer** within `WakeTimeoutSeconds` after the wake packets went out. The most common cause is the TV having dropped off the network in standby — see *Quick Start+* below.
 - **`config.json` could not be read.** A typo in the file used to silently turn the wake off, which looks exactly like a TV refusing to turn on. Now it says so. Fix the file and restart.
 - **Wake is enabled but no MAC address is configured.**
+
+A notice also appears at launch if another app already owns `Ctrl + Shift + 1` or `2`, since that hotkey will do nothing until it is released. Holding a hotkey down no longer repeats it, and a second copy of ScreenSwitcher exits straight away instead of sitting in the tray with no hotkeys.
 
 If you have deliberately set `EnableTvWake` to `false`, none of this applies: the switch is made immediately and the TV is your business.
 
@@ -87,7 +89,16 @@ If you have deliberately set `EnableTvWake` to `false`, none of this applies: th
   - Also enable **Quick Start+**. Without it, some models drop their standby network interface after a while and become unreachable until you turn the TV on by hand.
 - Note the MAC address of the interface the TV actually uses (wired or Wi‑Fi) from `Settings > Support > TV Information`, and reserve its IP on your router.
 
-### 3. Deployment
+### 3. Pin the TV's ARP entry (Wi‑Fi TVs: important)
+Windows can only send the unicast wake packet once it knows the MAC address behind the TV's IP, and it finds that out by asking the TV (ARP). A TV in *deep* standby stops answering, so Windows quietly drops the packet and only the broadcasts go out — which a dozing Wi‑Fi TV often misses. Pinning the entry removes the need to ask. Run once, in an **Administrator** terminal, substituting your adapter name, TV IP and MAC (the app logs this line with your values filled in):
+
+```bash
+netsh interface ipv4 set neighbors interface="Ethernet" address=192.168.1.50 neighbor=aa-bb-cc-dd-ee-ff store=persistent
+```
+
+It survives reboots. ScreenSwitcher checks it at every launch and logs the exact command, with your values filled in, if the entry is missing or points at the wrong MAC. To undo: `netsh interface ipv4 delete neighbors interface="Ethernet" address=192.168.1.50`.
+
+### 4. Deployment
 1. Build the project using `dotnet build -c Release`.
 2. Copy `config.json.template` to `config.json` in the build output folder.
 3. Edit `config.json` with your TV's MAC address and IP.
@@ -104,7 +115,7 @@ If you have deliberately set `EnableTvWake` to `false`, none of this applies: th
 | **Language** | C# |
 | **Framework** | .NET 10 (WinForms for Message Loop) |
 | **Display Engine** | Native Windows `DisplaySwitch.exe` |
-| **TV Presence** | TCP connect to webOS SSAP (3000/3001) or ICMP ping; `QueryDisplayConfig` target availability as the fallback when no IP is configured |
+| **TV Presence** | TCP connect to webOS SSAP (3000/3001) or ICMP ping, overlapping probes every 250 ms; `QueryDisplayConfig` target availability as the fallback when no IP is configured |
 | **WoL Logic** | UDP magic packet on ports 7 and 9 — unicast to the TV, limited broadcast, and a per-interface directed broadcast sent from each interface's own address |
 | **Configuration** | `System.Text.Json`, cached after first read |
 | **Persistence** | Windows Registry (HKCU Run Key) |

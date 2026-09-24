@@ -31,7 +31,7 @@ namespace ScreenSwitcher
             var attempts = new List<Task<string?>>();
             foreach (int port in ControlPorts)
                 attempts.Add(TryConnectAsync(address, port, timeoutMs, cancellationToken));
-            attempts.Add(TryPingAsync(address, timeoutMs));
+            attempts.Add(TryPingAsync(address, timeoutMs, cancellationToken));
 
             // Report the first positive answer; only give up once every probe has come back empty.
             while (attempts.Count > 0)
@@ -62,12 +62,12 @@ namespace ScreenSwitcher
             }
         }
 
-        private static async Task<string?> TryPingAsync(IPAddress address, int timeoutMs)
+        private static async Task<string?> TryPingAsync(IPAddress address, int timeoutMs, CancellationToken cancellationToken)
         {
             try
             {
                 using var ping = new Ping();
-                PingReply reply = await ping.SendPingAsync(address, timeoutMs).ConfigureAwait(false);
+                PingReply reply = await ping.SendPingAsync(address, TimeSpan.FromMilliseconds(timeoutMs), cancellationToken: cancellationToken).ConfigureAwait(false);
                 return reply.Status == IPStatus.Success ? "ping" : null;
             }
             catch
